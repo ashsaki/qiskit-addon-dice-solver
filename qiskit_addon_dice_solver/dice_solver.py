@@ -277,10 +277,8 @@ def _read_dice_outputs(
     energy_dice = struct.unpack("d", bytestring_energy)[0]
 
     # Construct the SCI wavefunction coefficients from Dice output dets.bin
-    occs, amps = _read_wave_function_magnitudes(os.path.join(dice_dir, "dets.bin"))
-    ci_strs = _ci_strs_from_occupancies(occs)
-    sci_coefficients, ci_strs_a, ci_strs_b = _construct_ci_vec_from_amplitudes(
-        amps, ci_strs
+    sci_coefficients, ci_strs_a, ci_strs_b = _construct_ci_vec_from_file(
+        filename=os.path.join(dice_dir, "dets.bin")
     )
     sci_state = SCIState(
         amplitudes=sci_coefficients, ci_strs_a=ci_strs_a, ci_strs_b=ci_strs_b
@@ -417,86 +415,70 @@ def _ci_strs_to_bytes(ci_strs: Sequence[int]) -> list[bytes]:
     return byte_list
 
 
-def _read_wave_function_magnitudes(
+def _get_address_a_b(occupany: bytes):
+    """Constructs alpha and beta addresses from occupany. Each byte in occupacy
+        must have values among following four characters:
+            1. '2' (unicode value 50)
+            2. 'a' (unicode value 97)
+            3. 'b' (unicode value 98)
+            4. '0' (unicode value 48)
+    """
+    addr_a = 0
+    addr_b = 0
+    for idx, byte in enumerate(occupany):
+        if byte == 50:
+            addr_a += 1 << idx
+            addr_b += 1 << idx
+        elif byte == 97:
+            addr_a += 1 << idx
+        elif byte == 98:
+            addr_b += 1 << idx
+        elif byte == 48:
+            pass
+        else:
+            raise ValueError(f"Byte {byte} value should not be in occupancy")
+        
+    return addr_a, addr_b
+
+
+def _construct_ci_vec_from_file(
     filename: str | Path,
-) -> tuple[list[str], list[float]]:
-    """Read the wavefunction magnitudes from binary file output from Dice."""
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Construct wavefunction amplitudes from CI strings and their associated amplitudes."""
     file2 = open(filename, "rb")
 
     # Read 32 bit integers describing the # dets and # orbs
     det_bytes = file2.read(4)
     num_dets = struct.unpack("i", det_bytes)[0]
+    sqrt_num_dets = int(np.sqrt(num_dets))
     norb_bytes = file2.read(4)
     num_orb = struct.unpack("i", norb_bytes)[0]
 
-    occupancy_strs = []
-    amplitudes = []
+    ci_vec = np.zeros((sqrt_num_dets, sqrt_num_dets))
+    ci_strs_a = np.zeros(sqrt_num_dets, dtype=np.int64)
+    ci_strs_b = np.zeros(sqrt_num_dets, dtype=np.int64)
+    ci_str_map = {}
+
+    idx = 0
     for i in range(2 * num_dets):
-        # read the wave function amplitude
         if i % 2 == 0:
             # Read the double-precision float describing the amplitude
             wf_bytes = file2.read(8)
             wf_amplitude = struct.unpack("d", wf_bytes)[0]
-            amplitudes.append(wf_amplitude)
         else:
-            b = file2.read(num_orb)
-            occupancy_strs.append(str(b)[2:-1])
+            occupany = file2.read(num_orb)
+            addr_a, addr_b = _get_address_a_b(occupany=occupany)
 
-    return occupancy_strs, amplitudes
+            for addr in [addr_a, addr_b]:
+                if not addr in ci_str_map:
+                    ci_str_map[addr] = idx
+                    idx += 1
 
+            idx_a = ci_str_map[addr_a]
+            idx_b = ci_str_map[addr_b]
 
-def _bitstring_from_occupancy_str(occupancy_str: str) -> np.ndarray:
-    """Convert an occupancy string into a bit array."""
-    norb = len(occupancy_str)
-    bitstring = np.zeros(2 * norb, dtype=bool)
-    for i in range(len(occupancy_str)):
-        if occupancy_str[i] == "2":
-            bitstring[i] = 1
-            bitstring[i + norb] = 1
-        if occupancy_str[i] == "a":
-            bitstring[i] = 1
-        if occupancy_str[i] == "b":
-            bitstring[i + norb] = 1
-
-    return bitstring
-
-
-def _ci_strs_from_occupancies(occupancy_strs: list[str]) -> list[list[int]]:
-    """Convert occupancies to CI strings."""
-    norb = len(occupancy_strs[0])
-    ci_strs = []
-    for occ in occupancy_strs:
-        bitstring = _bitstring_from_occupancy_str(occ)
-        bitstring_a = bitstring[:norb]
-        bitstring_b = bitstring[norb:]
-        ci_str_a = sum(b << i for i, b in enumerate(bitstring_a))
-        ci_str_b = sum(b << i for i, b in enumerate(bitstring_b))
-        ci_str = [ci_str_a, ci_str_b]
-        ci_strs.append(ci_str)
-
-    return ci_strs
-
-
-def _construct_ci_vec_from_amplitudes(
-    amps: list[float], ci_strs: list[list[int]]
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Construct wavefunction amplitudes from CI strings and their associated amplitudes."""
-    uniques = np.unique(np.array(ci_strs))
-    num_dets = len(uniques)
-    ci_vec = np.zeros((num_dets, num_dets))
-    ci_strs_a = np.zeros(num_dets, dtype=np.int64)
-    ci_strs_b = np.zeros(num_dets, dtype=np.int64)
-
-    ci_str_map = {uni_str: i for i, uni_str in enumerate(uniques)}
-
-    for amp, ci_str in zip(amps, ci_strs):
-        ci_str_a, ci_str_b = ci_str
-        i = ci_str_map[ci_str_a]
-        j = ci_str_map[ci_str_b]
-
-        ci_vec[i, j] = amp
-
-        ci_strs_a[i] = uniques[i]
-        ci_strs_b[j] = uniques[j]
-
+            ci_vec[idx_a][idx_b] = wf_amplitude
+            ci_strs_a[idx_a] = addr_a
+            ci_strs_b[idx_b] = addr_b
+    
     return ci_vec, ci_strs_a, ci_strs_b
