@@ -20,6 +20,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import time
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -248,6 +249,9 @@ def solve_hci(
     active_space_path = dice_dir / "fcidump.txt"
     tools.fcidump.from_integrals(active_space_path, hcore, eri, norb, nelec)
 
+    print("Starting Dice routines ... ")
+    print("  Writing input files ...")
+    write_file_start = time.perf_counter()
     _write_input_files(
         ci_strs=ci_strs,
         active_space_path=active_space_path,
@@ -260,12 +264,22 @@ def solve_hci(
         energy_tol=energy_tol,
         max_iter=max_iter,
     )
+    write_file_end = time.perf_counter()
+    print(f"  >> Write file took: {write_file_end - write_file_start:.4f} seconds")
 
+    print(f"  Calling Dice ...")
     # Navigate to dice dir and call Dice
+    call_dice_start = time.perf_counter()
     _call_dice(dice_dir, mpirun_options)
+    call_dice_end = time.perf_counter()
+    print(f"  >> Call Dice took: {call_dice_end - call_dice_start:.4f} seconds")
 
     # Read and convert outputs
+    print(f"  Reading Dice output ...")
+    read_output_start = time.perf_counter()
     e_dice, sci_state, avg_occupancies = _read_dice_outputs(dice_dir, norb, nelec)
+    read_output_end = time.perf_counter()
+    print(f"  >> Reading output took: {read_output_end - read_output_start:.4f} seconds")
 
     # Clean up the temp directory of intermediate files, if desired
     if clean_temp_dir:
