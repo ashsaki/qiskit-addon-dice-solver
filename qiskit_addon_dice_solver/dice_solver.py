@@ -447,7 +447,7 @@ def _call_dice(dice_dir: Path, mpirun_options: Sequence[str] | str | None) -> No
         process = subprocess.Popen(
             dice_call, cwd=dice_dir, stdout=logfile, stderr=logfile
         )
-        p = psutil.Process(process.id)
+        p = psutil.Process(process.pid)
         while process.poll() is None:
             mem = p.memory_info().rss
             if mem > peak_mem:
