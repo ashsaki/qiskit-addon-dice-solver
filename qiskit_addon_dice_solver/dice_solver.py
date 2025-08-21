@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import os
+import psutil
 import shutil
 import struct
 import subprocess
@@ -440,10 +441,20 @@ def _call_dice(dice_dir: Path, mpirun_options: Sequence[str] | str | None) -> No
     else:
         dice_call = ["mpirun", dice_path]
 
+    peak_mem = -1
+    avg_mem = 0
     with open(dice_log_path, "w") as logfile:
-        process = subprocess.run(
+        process = subprocess.Popen(
             dice_call, cwd=dice_dir, stdout=logfile, stderr=logfile
         )
+        p = psutil.Process(process.id)
+        while process.poll() is None:
+            mem = p.memory_info().rss
+            if mem > peak_mem:
+                peak_mem = mem
+            time.sleep(0.5)
+
+    print(f"Peak memory: {peak_mem / (1024 ** 3)} GBs")
     rdm_path = dice_dir / "spin1RDM.0.0.txt"
     # We check this manually because Dice is returning non-zero codes on successful executions,
     # so we can't rely on the status code to tell us whether Dice executed succesfully. Unclear
